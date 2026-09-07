@@ -1,0 +1,17 @@
+{
+    "name": "ai-business-platform",
+    "private": true,
+    "version": "0.1.0",
+    "packageManager": "pnpm@11.20.0",
+    "scripts": {
+        "dev": "next dev --webpack",
+        "build": "turbo build",
+        "lint": "turbo lint",
+        "test": "turbo test",
+        "format": "turbo format"
+    },
+    "devDependencies": {
+        "turbo": "^2.10.8",
+        "typescript": "^5.9.2"
+    }
+}

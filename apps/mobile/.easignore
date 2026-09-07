@@ -1,0 +1,23 @@
+# Local AI/editor tooling
+.agents/
+.claude/
+.idea/
+
+# Web-specific agent/tooling that is not needed for the mobile build
+apps/web/.agents/
+
+# Local dependencies
+**/node_modules/
+
+# Build/cache files
+**/.next/
+**/.turbo/
+**/dist/
+**/build/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
