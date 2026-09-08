@@ -145,9 +145,24 @@ export default function AiCallModal({
     // Stop and kill ring tone
     stopRingTone();
 
-    // Cancel any active SpeechSynthesis immediately
+    // Cancel any active SpeechSynthesis immediately with multi-frame purge
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
+      try {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.cancel();
+        setTimeout(() => {
+          if (typeof window !== "undefined" && "speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+          }
+        }, 50);
+        setTimeout(() => {
+          if (typeof window !== "undefined" && "speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+          }
+        }, 150);
+      } catch (err) {
+        console.warn("Speech cancel error:", err);
+      }
     }
 
     // Terminate audio hardware context immediately
@@ -672,7 +687,6 @@ export default function AiCallModal({
       }).catch(console.warn);
     }
 
-    playSuccessSound();
     setIsLogged(true);
 
     if (onCallLogged && leadId) {
