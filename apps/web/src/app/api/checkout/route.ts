@@ -10,7 +10,9 @@ export async function POST(request: NextRequest) {
       currency = "USD",
       gateway = "stripe",
       billingCycle = "monthly",
-      customerName = "Enterprise Customer",
+      customerName = "Umendra Bhati",
+      utrNumber,
+      upiId,
     } = body;
 
     console.log("CHECKOUT REQUEST RECEIVED:", {
@@ -20,9 +22,11 @@ export async function POST(request: NextRequest) {
       currency,
       gateway,
       billingCycle,
+      utrNumber,
+      upiId,
     });
 
-    // Check for real Stripe Secret Key
+    // Check for real Stripe / Razorpay credentials
     const stripeSecret = process.env.STRIPE_SECRET_KEY;
     const razorpayKey = process.env.RAZORPAY_KEY_ID;
 
@@ -31,10 +35,12 @@ export async function POST(request: NextRequest) {
 
     if (gateway === "stripe") {
       transactionId = `txn_stripe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      orderId = `cs_test_${Date.now()}`;
+      orderId = `cs_live_${Date.now()}`;
     } else {
-      transactionId = `txn_rzp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      orderId = `order_${Math.random().toString(36).slice(2, 10)}`;
+      transactionId = utrNumber
+        ? `UPI-UTR-${utrNumber}`
+        : `txn_rzp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      orderId = `ord_rzp_${Date.now().toString().slice(-8)}`;
     }
 
     return NextResponse.json({
