@@ -66,6 +66,7 @@ export default function PaymentModal({
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [utrNumber, setUtrNumber] = useState<string>("");
   const [copiedUpi, setCopiedUpi] = useState(false);
+  const [paymentError, setPaymentError] = useState<string>("");
 
   // Load Razorpay Standard Checkout SDK
   useEffect(() => {
@@ -123,6 +124,25 @@ export default function PaymentModal({
     gateway === "razorpay" && isTestMode ? "₹1" : planDisplayPrice;
 
   const handleProcessPayment = async () => {
+    setPaymentError("");
+
+    // Strict validation: UPI QR payment MUST have 12-digit UTR
+    if (gateway === "razorpay") {
+      const cleanUtr = utrNumber.trim();
+      if (!cleanUtr) {
+        setPaymentError(
+          "⚠️ Pehle apne phone se QR scan karke pay kijiye, fir receipt se 12-digit UTR number yahan daal kar activate kijiye!"
+        );
+        return;
+      }
+      if (cleanUtr.length !== 12 || !/^\d{12}$/.test(cleanUtr)) {
+        setPaymentError(
+          "⚠️ Galat UTR number! Bank UTR hamesha 12 digits ka number hota hai (jaise: 424109823145) jo aapke BHIM/PhonePe/GPay receipt me aata hai."
+        );
+        return;
+      }
+    }
+
     playClickSound();
     setIsProcessing(true);
 
@@ -147,6 +167,12 @@ export default function PaymentModal({
       });
 
       const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setPaymentError(data.error || "Payment verification failed.");
+        setIsProcessing(false);
+        return;
+      }
 
       // Bank verification & invoice generation
       setTimeout(() => {
@@ -174,6 +200,7 @@ export default function PaymentModal({
       }, 1200);
     } catch (err) {
       console.error("Payment error:", err);
+      setPaymentError("Network or server error verifying transaction.");
       setIsProcessing(false);
     }
   };
@@ -505,20 +532,45 @@ export default function PaymentModal({
                       {/* UTR TRANSACTION CONFIRMATION INPUT */}
                       <div className="mt-3 pt-3 border-t border-white/10 text-left">
                         <label className="block text-[10px] font-semibold text-slate-400 mb-1">
-                          After Payment: Enter 12-Digit UTR / Ref No. (From GPay/PhonePe):
+                          After Payment: Enter 12-Digit UTR / Ref No. (From BHIM/GPay/PhonePe):
                         </label>
-                        <input
-                          type="text"
-                          value={utrNumber}
-                          onChange={(e) =>
-                            setUtrNumber(e.target.value.replace(/[^\d]/g, "").slice(0, 12))
-                          }
-                          placeholder="e.g. 424109823145"
-                          className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-1.5 text-xs font-mono text-cyan-300 placeholder-slate-600 focus:border-cyan-500 focus:outline-none"
-                        />
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={utrNumber}
+                            onChange={(e) => {
+                              setPaymentError("");
+                              setUtrNumber(e.target.value.replace(/[^\d]/g, "").slice(0, 12));
+                            }}
+                            placeholder="e.g. 424109823145"
+                            className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-xs font-mono text-cyan-300 placeholder-slate-600 focus:border-cyan-500 focus:outline-none"
+                          />
+                          <span className="absolute right-3 top-2.5 text-[10px] font-mono text-slate-500">
+                            {utrNumber.length}/12
+                          </span>
+                        </div>
+                        <p className="text-[10px] mt-1.5 transition">
+                          {utrNumber.length === 12 ? (
+                            <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                              <CheckCircle2 size={12} /> 12-digit UTR ready! Click &quot;Verify & Activate&quot; below.
+                            </span>
+                          ) : (
+                            <span className="text-amber-400/90 flex items-center gap-1">
+                              <AlertCircle size={12} /> Pehle QR scan karke pay karein aur receipt se 12-digit UTR yahan dalein tabhi activate hoga.
+                            </span>
+                          )}
+                        </p>
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* PAYMENT ERROR BANNER */}
+              {paymentError && (
+                <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-300 flex items-start gap-2">
+                  <AlertCircle size={16} className="shrink-0 text-red-400 mt-0.5" />
+                  <span>{paymentError}</span>
                 </div>
               )}
 
@@ -551,11 +603,18 @@ export default function PaymentModal({
             <button
               type="button"
               onClick={handleProcessPayment}
-              disabled={isProcessing}
-              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-6 py-3 text-xs font-bold text-white shadow-lg shadow-emerald-500/25 transition hover:brightness-110 active:scale-95 disabled:opacity-50"
+              disabled={
+                isProcessing ||
+                (gateway === "razorpay" && utrNumber.trim().length !== 12)
+              }
+              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-6 py-3 text-xs font-bold text-white shadow-lg shadow-emerald-500/25 transition hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Zap size={14} className={isProcessing ? "animate-spin" : "fill-white"} />
-              {isProcessing ? "Authorizing Payment..." : `⚡ Pay ${currentDisplayPrice} & Activate`}
+              {isProcessing
+                ? "Verifying Bank UTR..."
+                : gateway === "razorpay" && utrNumber.trim().length !== 12
+                ? `🔒 Enter 12-Digit UTR to Activate`
+                : `⚡ Verify ${currentDisplayPrice} & Activate`}
             </button>
           </div>
         )}

@@ -30,6 +30,31 @@ export async function POST(request: NextRequest) {
     const stripeSecret = process.env.STRIPE_SECRET_KEY;
     const razorpayKey = process.env.RAZORPAY_KEY_ID;
 
+    // Strict validation: UPI QR payment MUST have valid 12-digit bank UTR reference
+    if (gateway === "razorpay" && !body.razorpayPaymentId) {
+      const cleanUtr = (utrNumber || "").trim();
+      if (!cleanUtr) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Payment verification required. Please complete payment in your UPI app and enter the 12-digit UTR reference number from your bank receipt.",
+          },
+          { status: 400 }
+        );
+      }
+      if (cleanUtr.length !== 12 || !/^\d{12}$/.test(cleanUtr)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Invalid UTR number. Bank UTR reference must be exactly 12 numeric digits (e.g. 424109823145).",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     let transactionId = "";
     let orderId = "";
 
