@@ -60,6 +60,18 @@ export default function AiCallModal({
   const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
+  const callActiveRef = useRef(false);
+  const timeoutsRef = useRef<NodeJS.Timeout[]>([]);
+
+  // Safe timeout scheduler that immediately cancels if call ends
+  const scheduleTimeout = (fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      if (!callActiveRef.current) return;
+      fn();
+    }, ms);
+    timeoutsRef.current.push(id);
+    return id;
+  };
 
   // Auto-scroll transcript to bottom
   useEffect(() => {
@@ -89,7 +101,7 @@ export default function AiCallModal({
 
   // Play realistic US telephone ringback tone (440Hz + 480Hz)
   const startRingTone = () => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !callActiveRef.current) return;
     try {
       const AudioCtxClass =
         window.AudioContext ||
@@ -122,6 +134,46 @@ export default function AiCallModal({
     }
   };
 
+  // Master audio & speech killswitch (ensures ZERO lingering sound)
+  const stopAllAudioAndTimers = () => {
+    callActiveRef.current = false;
+
+    // Clear all pending conversation timeouts
+    timeoutsRef.current.forEach((id) => clearTimeout(id));
+    timeoutsRef.current = [];
+
+    // Stop and kill ring tone
+    stopRingTone();
+
+    // Cancel any active SpeechSynthesis immediately
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    // Terminate audio hardware context immediately
+    if (audioCtxRef.current) {
+      try {
+        audioCtxRef.current.close();
+      } catch {
+        // ignore
+      }
+      audioCtxRef.current = null;
+    }
+
+    // Stop Web Speech Recognition microphone if active
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // ignore
+      }
+      recognitionRef.current = null;
+    }
+
+    setIsAiSpeaking(false);
+    setIsListening(false);
+  };
+
   const [voiceMode, setVoiceMode] = useState<"indian" | "jarvis" | "us">("indian");
 
   // Load saved voice accent
@@ -136,8 +188,12 @@ export default function AiCallModal({
 
   // Speak AI lines through speaker
   const speakText = (text: string, onEnd?: () => void) => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      if (onEnd) setTimeout(onEnd, 2500);
+    if (
+      typeof window === "undefined" ||
+      !("speechSynthesis" in window) ||
+      !callActiveRef.current
+    ) {
+      setIsAiSpeaking(false);
       return;
     }
     window.speechSynthesis.cancel();
@@ -185,13 +241,17 @@ export default function AiCallModal({
 
     utterance.onend = () => {
       setIsAiSpeaking(false);
-      if (onEnd) onEnd();
+      if (onEnd && callActiveRef.current) onEnd();
     };
 
     utterance.onerror = () => {
       setIsAiSpeaking(false);
-      if (onEnd) onEnd();
     };
+
+    if (!callActiveRef.current) {
+      setIsAiSpeaking(false);
+      return;
+    }
 
     window.speechSynthesis.speak(utterance);
   };
@@ -353,32 +413,28 @@ export default function AiCallModal({
   // Call Lifecycle Sequence
   useEffect(() => {
     if (!isOpen) {
-      stopRingTone();
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
+      stopAllAudioAndTimers();
       if (timerRef.current) clearInterval(timerRef.current);
       setDuration(0);
       setTranscripts([]);
       setIsLogged(false);
-      setIsAiSpeaking(false);
-      setIsListening(false);
       setCallStatus("dialing");
       return;
     }
 
     // Call Progression Sequence
+    callActiveRef.current = true;
     setCallStatus("dialing");
     setTranscripts([]);
     setIsLogged(false);
 
     // 1. Dialing -> Ringing (after 1.2s)
-    const dialTimer = setTimeout(() => {
+    scheduleTimeout(() => {
       setCallStatus("ringing");
       startRingTone();
 
       // 2. Customer Picks Up (after 3.5s ringing)
-      const ringTimer = setTimeout(() => {
+      scheduleTimeout(() => {
         stopRingTone();
         setCallStatus("connected");
 
@@ -408,7 +464,7 @@ export default function AiCallModal({
         ]);
 
         // Step 2: AI Introduction (00:03)
-        setTimeout(() => {
+        scheduleTimeout(() => {
           const aiSpeech1 = isSelfTest
             ? `Hello Umendra! This is your autonomous AI voice executive connected to your Salesforce CRM live calling bridge. All audio synthesis and sync channels are operating at peak performance!`
             : `Hello ${leadName}! I am calling on behalf of Umendra Bhati regarding your business operations and CRM automations at ${cleanCompany}. We noticed your team is actively scaling operations!`;
@@ -424,7 +480,7 @@ export default function AiCallModal({
 
           speakText(aiSpeech1, () => {
             // Step 3: Customer asks about turnaround (00:11)
-            setTimeout(() => {
+            scheduleTimeout(() => {
               const customerLine2 = isSelfTest
                 ? `System diagnostic confirmed! Voice clarity is 10/10 and telemetry is fully synchronized.`
                 : `Hi! Yes, we have been looking to automate our Salesforce lead routing and approval flows. But what is your typical turnaround time?`;
@@ -439,7 +495,7 @@ export default function AiCallModal({
               ]);
 
               // Step 4: AI explains turnaround & timeline (00:18)
-              setTimeout(() => {
+              scheduleTimeout(() => {
                 const aiSpeech2 = isSelfTest
                   ? `Everything is calibrated to perfection. You can talk freely or use voice commands to dial any client in your Salesforce CRM!`
                   : `We typically configure and deploy custom Salesforce flow automations within 48 to 72 hours, with zero disruption to your daily sales operations!`;
@@ -455,7 +511,7 @@ export default function AiCallModal({
 
                 speakText(aiSpeech2, () => {
                   // Step 5: Customer asks about pricing & security (00:27)
-                  setTimeout(() => {
+                  scheduleTimeout(() => {
                     const customerLine3 = isSelfTest
                       ? `Voice diagnostic complete. Ready for real calls!`
                       : `That's very fast! What about pricing, and is our Salesforce customer data 100% secure?`;
@@ -470,7 +526,7 @@ export default function AiCallModal({
                     ]);
 
                     // Step 6: AI explains pricing, encryption & invites to demo (00:35)
-                    setTimeout(() => {
+                    scheduleTimeout(() => {
                       const aiSpeech3 = isSelfTest
                         ? `All systems verified. Have a great day Umendra!`
                         : `100% secure! All data stays natively inside your Salesforce instance using OAuth 2.0 with enterprise 256-bit encryption. And pricing is customized to your team size with no retainers. Would Thursday 2 PM work for a quick 10-minute walkthrough?`;
@@ -486,7 +542,7 @@ export default function AiCallModal({
 
                       speakText(aiSpeech3, () => {
                         // Step 7: Customer locks in demo & requests WhatsApp summary (00:46)
-                        setTimeout(() => {
+                        scheduleTimeout(() => {
                           const customerLine4 = isSelfTest
                             ? `Confirmed.`
                             : `Thursday 2 PM sounds perfect. Send over the calendar invite and WhatsApp demo summary!`;
@@ -501,7 +557,7 @@ export default function AiCallModal({
                           ]);
 
                           // Step 8: AI confirms invite & wrap-up (00:53)
-                          setTimeout(() => {
+                          scheduleTimeout(() => {
                             const aiSpeech4 = isSelfTest
                               ? `Call concluded.`
                               : `Calendar invite and WhatsApp demo summary are on their way to you right now! Thank you for your time ${leadName}, Umendra looks forward to connecting on Thursday at 2 PM!`;
@@ -516,7 +572,7 @@ export default function AiCallModal({
                             ]);
 
                             speakText(aiSpeech4, () => {
-                              setTimeout(() => {
+                              scheduleTimeout(() => {
                                 const customerLine5 = `Thanks, looking forward to it! Have a great day.`;
                                 setTranscripts((prev) => [
                                   ...prev,
@@ -539,16 +595,10 @@ export default function AiCallModal({
           });
         }, 1200);
       }, 3500);
-
-      return () => clearTimeout(ringTimer);
     }, 1200);
 
     return () => {
-      clearTimeout(dialTimer);
-      stopRingTone();
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
+      stopAllAudioAndTimers();
     };
   }, [isOpen, leadName, company]);
 
@@ -569,10 +619,7 @@ export default function AiCallModal({
 
   // End Call Handler
   const handleEndCall = () => {
-    stopRingTone();
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
+    stopAllAudioAndTimers();
     setCallStatus("ended");
 
     // Save to Call Intelligence History
