@@ -87,11 +87,12 @@ export default function PaymentModal({
 
   const effectiveAmount = isTestMode ? 1 : planAmount;
   const cleanUpi = (upiId || "umendrabhati722@ptaxis").trim();
+  const formattedAmount = Number(effectiveAmount).toFixed(2);
+  const cleanNote = isTestMode ? "TestDeposit" : "Subscription";
 
+  // Strict NPCI/BHIM Compliant UPI URI
   const upiUrl = plan
-    ? `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=Umendra%20Bhati&am=${effectiveAmount}&cu=INR&tn=${encodeURIComponent(
-        isTestMode ? "AI Platform Test Deposit" : `${plan.name} Plan`
-      )}`
+    ? `upi://pay?pa=${cleanUpi}&pn=Umendra%20Bhati&am=${formattedAmount}&cu=INR&tn=${cleanNote}`
     : "";
 
   // Generate real standard ISO/IEC 18004 UPI QR Code in real time
