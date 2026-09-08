@@ -60,7 +60,8 @@ export default function PaymentModal({
   const [cardName, setCardName] = useState("Umendra Bhati");
 
   // UPI Form state (Razorpay)
-  const [upiId, setUpiId] = useState("umendra@upi");
+  const [upiId, setUpiId] = useState("umendrabhati722@ptaxis");
+  const [isTestMode, setIsTestMode] = useState(true);
   const [showQr, setShowQr] = useState(true);
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [utrNumber, setUtrNumber] = useState<string>("");
@@ -77,16 +78,20 @@ export default function PaymentModal({
     }
   }, []);
 
-  // Compute actual price
-  const numericAmount = plan
+  // Compute actual price and live test mode amount
+  const planAmount = plan
     ? plan.billingCycle === "yearly"
       ? Math.round(plan.priceInr * 0.8)
       : plan.priceInr
     : 2499;
 
-  const cleanUpi = (upiId || "umendra@upi").trim();
+  const effectiveAmount = isTestMode ? 1 : planAmount;
+  const cleanUpi = (upiId || "umendrabhati722@ptaxis").trim();
+
   const upiUrl = plan
-    ? `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=Umendra%20Bhati&am=${numericAmount}&cu=INR&tn=${encodeURIComponent(`${plan.name} Plan`)}`
+    ? `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=Umendra%20Bhati&am=${effectiveAmount}&cu=INR&tn=${encodeURIComponent(
+        isTestMode ? "AI Platform Test Deposit" : `${plan.name} Plan`
+      )}`
     : "";
 
   // Generate real standard ISO/IEC 18004 UPI QR Code in real time
@@ -108,23 +113,29 @@ export default function PaymentModal({
 
   if (!isOpen || !plan) return null;
 
-  const displayPrice =
+  const planDisplayPrice =
     currency === "USD"
       ? `$${plan.billingCycle === "yearly" ? Math.round(plan.priceUsd * 0.8) : plan.priceUsd}`
       : `₹${plan.billingCycle === "yearly" ? Math.round(plan.priceInr * 0.8).toLocaleString("en-IN") : plan.priceInr.toLocaleString("en-IN")}`;
+
+  const currentDisplayPrice =
+    gateway === "razorpay" && isTestMode ? "₹1" : planDisplayPrice;
 
   const handleProcessPayment = async () => {
     playClickSound();
     setIsProcessing(true);
 
     try {
+      const actualAmount =
+        currency === "USD" ? plan.priceUsd : isTestMode ? 1 : plan.priceInr;
+
       const response = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           planId: plan.id,
           planName: plan.name,
-          amount: currency === "USD" ? plan.priceUsd : plan.priceInr,
+          amount: actualAmount,
           currency,
           gateway,
           billingCycle: plan.billingCycle,
@@ -151,7 +162,7 @@ export default function PaymentModal({
           orderId: data.orderId || `ORD_${Date.now().toString().slice(-8)}`,
           transactionId:
             data.transactionId || (utrNumber ? `UPI-${utrNumber}` : `TXN_${Date.now()}`),
-          amount: displayPrice,
+          amount: currentDisplayPrice,
         };
         setCompletedOrder(orderInfo);
 
@@ -193,7 +204,7 @@ export default function PaymentModal({
             </div>
             <div className="text-right">
               <span className="text-3xl font-extrabold text-cyan-400">
-                {displayPrice}
+                {planDisplayPrice}
               </span>
               <span className="text-xs text-slate-400">
                 /{plan.billingCycle === "yearly" ? "mo" : "mo"}
@@ -368,6 +379,39 @@ export default function PaymentModal({
               {/* RAZORPAY UPI / QR FORM */}
               {gateway === "razorpay" && (
                 <div className="space-y-3">
+                  {/* LIVE ₹1 TEST vs FULL PLAN TOGGLE */}
+                  <div className="rounded-2xl border border-white/10 bg-slate-900/90 p-1 grid grid-cols-2 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsTestMode(true);
+                        playClickSound();
+                      }}
+                      className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition ${
+                        isTestMode
+                          ? "bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/25"
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      <Zap size={13} className={isTestMode ? "fill-white" : ""} />
+                      <span>🧪 Live ₹1 Test Deposit</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsTestMode(false);
+                        playClickSound();
+                      }}
+                      className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition ${
+                        !isTestMode
+                          ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/25"
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      <span>⚡ Full Plan ({planDisplayPrice})</span>
+                    </button>
+                  </div>
+
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
                       Virtual Payment Address (UPI ID)
@@ -376,11 +420,11 @@ export default function PaymentModal({
                       type="text"
                       value={upiId}
                       onChange={(e) => setUpiId(e.target.value)}
-                      placeholder="e.g. mobile@paytm or name@okaxis"
-                      className="w-full rounded-xl border border-white/10 bg-slate-900 px-3.5 py-2 text-xs font-mono text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+                      placeholder="e.g. umendrabhati722@ptaxis"
+                      className="w-full rounded-xl border border-white/10 bg-slate-900 px-3.5 py-2 text-xs font-mono text-cyan-300 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
                     />
                     <span className="text-[10px] text-slate-500 mt-1 block">
-                      Supported: Google Pay, PhonePe, Paytm, BHIM, Amazon Pay
+                      Direct Deposit to: <strong className="text-emerald-400">Umendra Bhati</strong> (7850051826 / Axis Bank UPI)
                     </span>
                   </div>
 
@@ -420,7 +464,7 @@ export default function PaymentModal({
 
                       <div className="mt-3 space-y-1">
                         <p className="text-xs font-bold text-white font-mono">
-                          Scan with any UPI App • {displayPrice}
+                          Scan with any UPI App • {currentDisplayPrice} {isTestMode && "(Live Test Deposit)"}
                         </p>
                         <p className="text-[11px] text-cyan-400 font-medium">
                           Payee: Umendra Bhati • UPI: {cleanUpi}
@@ -510,7 +554,7 @@ export default function PaymentModal({
               className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-6 py-3 text-xs font-bold text-white shadow-lg shadow-emerald-500/25 transition hover:brightness-110 active:scale-95 disabled:opacity-50"
             >
               <Zap size={14} className={isProcessing ? "animate-spin" : "fill-white"} />
-              {isProcessing ? "Authorizing Payment..." : `⚡ Pay ${displayPrice} & Activate`}
+              {isProcessing ? "Authorizing Payment..." : `⚡ Pay ${currentDisplayPrice} & Activate`}
             </button>
           </div>
         )}
