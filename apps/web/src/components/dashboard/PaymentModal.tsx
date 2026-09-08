@@ -62,6 +62,7 @@ export default function PaymentModal({
   // UPI Form state (Razorpay)
   const [upiId, setUpiId] = useState("umendrabhati722@ptaxis");
   const [isTestMode, setIsTestMode] = useState(true);
+  const [razorpayMethod, setRazorpayMethod] = useState<"auto" | "manual">("auto");
   const [showQr, setShowQr] = useState(true);
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [utrNumber, setUtrNumber] = useState<string>("");
@@ -123,11 +124,145 @@ export default function PaymentModal({
   const currentDisplayPrice =
     gateway === "razorpay" && isTestMode ? "₹1" : planDisplayPrice;
 
+  // 100% Automated Bank Verification via Razorpay Standard Checkout
+  const handleRazorpayAutoCheckout = async () => {
+    setPaymentError("");
+    playClickSound();
+    setIsProcessing(true);
+
+    try {
+      const actualAmount = isTestMode ? 1 : planAmount;
+
+      // 1. Create order on server
+      const res = await fetch("/api/razorpay/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: actualAmount,
+          planId: plan.id,
+          planName: plan.name,
+          customerName: cardName || "Umendra Bhati",
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setPaymentError(
+          data.error || "Order creation failed. Please ensure Razorpay Key ID and Secret are configured."
+        );
+        setIsProcessing(false);
+        return;
+      }
+
+      if (typeof window === "undefined" || !(window as any).Razorpay) {
+        setPaymentError("Razorpay gateway SDK is initializing. Please try again in a few seconds.");
+        setIsProcessing(false);
+        return;
+      }
+
+      // 2. Launch official Razorpay Checkout popup
+      const options = {
+        key: data.keyId,
+        amount: data.amount,
+        currency: data.currency || "INR",
+        name: "AI Business Platform",
+        description: `${plan.name} (${isTestMode ? "🧪 ₹1 Live Test" : "Verified Activation"})`,
+        order_id: data.orderId,
+        prefill: {
+          name: cardName || "Umendra Bhati",
+          email: "umendrabhati722@gmail.com",
+          contact: "7850051826",
+        },
+        theme: {
+          color: "#06b6d4",
+        },
+        modal: {
+          ondismiss: function () {
+            setIsProcessing(false);
+          },
+        },
+        handler: async function (response: any) {
+          setIsProcessing(true);
+          try {
+            // 3. Verify cryptographic HMAC SHA256 signature on server
+            const verifyRes = await fetch("/api/razorpay/verify-payment", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                planId: plan.id,
+                planName: plan.name,
+                amount: currentDisplayPrice,
+              }),
+            });
+
+            const verifyData = await verifyRes.json();
+
+            if (verifyRes.ok && verifyData.success) {
+              playSuccessSound();
+              setIsProcessing(false);
+              setIsCompleted(true);
+
+              const orderInfo = {
+                id: plan.id,
+                name: plan.name,
+                currency: "INR",
+                activatedAt: new Date().toISOString(),
+                gateway: "razorpay",
+                orderId: response.razorpay_order_id,
+                transactionId: response.razorpay_payment_id,
+                amount: currentDisplayPrice,
+              };
+
+              setCompletedOrder(orderInfo);
+
+              if (typeof window !== "undefined") {
+                localStorage.setItem(
+                  "active_subscription_plan",
+                  JSON.stringify(orderInfo)
+                );
+              }
+            } else {
+              setPaymentError(
+                verifyData.error || "Cryptographic bank signature verification failed."
+              );
+              setIsProcessing(false);
+            }
+          } catch (vErr) {
+            console.error("Verification call error:", vErr);
+            setPaymentError("Network error verifying transaction with bank.");
+            setIsProcessing(false);
+          }
+        },
+      };
+
+      const rzp = new (window as any).Razorpay(options);
+      rzp.on("payment.failed", function (response: any) {
+        setPaymentError(`Payment failed: ${response.error?.description || "Transaction declined by bank"}`);
+        setIsProcessing(false);
+      });
+      rzp.open();
+    } catch (err: any) {
+      console.error("Razorpay checkout error:", err);
+      setPaymentError("Could not launch Razorpay gateway. Please check connection.");
+      setIsProcessing(false);
+    }
+  };
+
+  // Fallback / Manual UTR Payment verification
   const handleProcessPayment = async () => {
     setPaymentError("");
 
+    if (gateway === "razorpay" && razorpayMethod === "auto") {
+      await handleRazorpayAutoCheckout();
+      return;
+    }
+
     // Strict validation: UPI QR payment MUST have 12-digit UTR
-    if (gateway === "razorpay") {
+    if (gateway === "razorpay" && razorpayMethod === "manual") {
       const cleanUtr = utrNumber.trim();
       if (!cleanUtr) {
         setPaymentError(
@@ -440,126 +575,171 @@ export default function PaymentModal({
                     </button>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      Virtual Payment Address (UPI ID)
-                    </label>
-                    <input
-                      type="text"
-                      value={upiId}
-                      onChange={(e) => setUpiId(e.target.value)}
-                      placeholder="e.g. umendrabhati722@ptaxis"
-                      className="w-full rounded-xl border border-white/10 bg-slate-900 px-3.5 py-2 text-xs font-mono text-cyan-300 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
-                    />
-                    <span className="text-[10px] text-slate-500 mt-1 block">
-                      Direct Deposit to: <strong className="text-emerald-400">Umendra Bhati</strong> (7850051826 / Axis Bank UPI)
-                    </span>
-                  </div>
-
-                  <div className="rounded-xl border border-white/10 bg-slate-900/60 p-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <QrCode size={20} className="text-cyan-400" />
-                      <div>
-                        <p className="text-xs font-semibold text-white">Scan UPI QR Code</p>
-                        <p className="text-[10px] text-slate-400">Instant camera scan checkout</p>
-                      </div>
-                    </div>
+                  {/* AUTOMATED VS MANUAL TABS */}
+                  <div className="flex rounded-xl border border-white/10 bg-slate-950 p-1 text-xs">
                     <button
                       type="button"
-                      onClick={() => setShowQr(!showQr)}
-                      className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold text-cyan-300 hover:bg-cyan-500/20"
+                      onClick={() => {
+                        setRazorpayMethod("auto");
+                        playClickSound();
+                      }}
+                      className={`flex-1 py-1.5 rounded-lg font-semibold transition flex items-center justify-center gap-1.5 ${
+                        razorpayMethod === "auto"
+                          ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+                          : "text-slate-400 hover:text-white"
+                      }`}
                     >
-                      {showQr ? "Hide QR" : "Show QR"}
+                      <Zap size={13} />
+                      <span>Automated Gateway (Zero Typing)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRazorpayMethod("manual");
+                        playClickSound();
+                      }}
+                      className={`flex-1 py-1.5 rounded-lg font-semibold transition flex items-center justify-center gap-1.5 ${
+                        razorpayMethod === "manual"
+                          ? "bg-slate-800 text-slate-200 border border-white/20"
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      <QrCode size={13} />
+                      <span>Manual UPI QR</span>
                     </button>
                   </div>
 
-                  {showQr && (
-                    <div className="rounded-2xl border border-cyan-500/30 bg-slate-900/90 p-4 text-center animate-in fade-in duration-200 shadow-xl shadow-cyan-500/10">
-                      <div className="mx-auto flex h-52 w-52 items-center justify-center rounded-2xl bg-white p-3 shadow-inner ring-4 ring-cyan-500/20">
-                        {qrDataUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={qrDataUrl}
-                            alt="Real Scannable NPCI UPI QR Code"
-                            className="h-full w-full object-contain rounded-lg"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center text-xs text-slate-700 font-mono animate-pulse">
-                            Generating Standard UPI QR...
-                          </div>
-                        )}
+                  {/* AUTOMATED GATEWAY INFO CARD */}
+                  {razorpayMethod === "auto" && (
+                    <div className="rounded-2xl border border-cyan-500/30 bg-slate-900/90 p-4 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
+                          <ShieldCheck size={22} />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-white">100% Real Bank-Verified Checkout</h4>
+                          <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                            Click below to open official Razorpay Checkout. Scan the dynamic QR with <strong>PhonePe, BHIM, Google Pay, or Paytm</strong> on your mobile. Your subscription activates <strong>automatically</strong> upon payment confirmation!
+                          </p>
+                        </div>
                       </div>
 
-                      <div className="mt-3 space-y-1">
-                        <p className="text-xs font-bold text-white font-mono">
-                          Scan with any UPI App • {currentDisplayPrice} {isTestMode && "(Live Test Deposit)"}
-                        </p>
-                        <p className="text-[11px] text-cyan-400 font-medium">
-                          Payee: Umendra Bhati • UPI: {cleanUpi}
-                        </p>
-                        <p className="text-[10px] text-slate-400">
-                          100% Real NPCI QR: Scannable via PhonePe, GPay, Paytm, BHIM, Cred
-                        </p>
-                      </div>
-
-                      {/* QUICK MOBILE UPI APP DEEP-LINK & COPY */}
-                      <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-                        <a
-                          href={upiUrl}
-                          className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
-                          title="Open payment screen directly in your mobile UPI app"
-                        >
-                          <ExternalLink size={12} />
-                          Open in UPI App
-                        </a>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (typeof navigator !== "undefined") {
-                              navigator.clipboard.writeText(cleanUpi);
-                              setCopiedUpi(true);
-                              setTimeout(() => setCopiedUpi(false), 2000);
-                            }
-                          }}
-                          className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-white transition"
-                        >
-                          <Copy size={12} />
-                          {copiedUpi ? "✓ UPI ID Copied!" : "Copy UPI ID"}
-                        </button>
-                      </div>
-
-                      {/* UTR TRANSACTION CONFIRMATION INPUT */}
-                      <div className="mt-3 pt-3 border-t border-white/10 text-left">
-                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
-                          After Payment: Enter 12-Digit UTR / Ref No. (From BHIM/GPay/PhonePe):
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="text"
-                            value={utrNumber}
-                            onChange={(e) => {
-                              setPaymentError("");
-                              setUtrNumber(e.target.value.replace(/[^\d]/g, "").slice(0, 12));
-                            }}
-                            placeholder="e.g. 424109823145"
-                            className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-xs font-mono text-cyan-300 placeholder-slate-600 focus:border-cyan-500 focus:outline-none"
-                          />
-                          <span className="absolute right-3 top-2.5 text-[10px] font-mono text-slate-500">
-                            {utrNumber.length}/12
+                      <div className="rounded-xl border border-white/5 bg-slate-950/70 p-3 space-y-2 text-xs">
+                        <div className="flex justify-between text-slate-400">
+                          <span>Verified Payee:</span>
+                          <span className="font-semibold text-white">Umendra Bhati (Axis Bank)</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                          <span>Amount to Pay:</span>
+                          <span className="font-bold text-cyan-400 text-sm">{currentDisplayPrice}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                          <span>Bank Verification:</span>
+                          <span className="text-emerald-400 font-medium flex items-center gap-1">
+                            <CheckCircle2 size={12} /> Instant Cryptographic HMAC-SHA256
                           </span>
                         </div>
-                        <p className="text-[10px] mt-1.5 transition">
-                          {utrNumber.length === 12 ? (
-                            <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                              <CheckCircle2 size={12} /> 12-digit UTR ready! Click &quot;Verify & Activate&quot; below.
-                            </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-[10px] text-slate-500 justify-center">
+                        <span>• Zero manual UTR entry</span>
+                        <span>• Official RBI-regulated Gateway</span>
+                        <span>• Instant Activation</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* MANUAL UPI QR & UTR OPTION */}
+                  {razorpayMethod === "manual" && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                          Virtual Payment Address (UPI ID)
+                        </label>
+                        <input
+                          type="text"
+                          value={upiId}
+                          onChange={(e) => setUpiId(e.target.value)}
+                          placeholder="e.g. umendrabhati722@ptaxis"
+                          className="w-full rounded-xl border border-white/10 bg-slate-900 px-3.5 py-2 text-xs font-mono text-cyan-300 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+                        />
+                        <span className="text-[10px] text-slate-500 mt-1 block">
+                          Direct Deposit to: <strong className="text-emerald-400">Umendra Bhati</strong> (7850051826 / Axis Bank UPI)
+                        </span>
+                      </div>
+
+                      <div className="rounded-2xl border border-cyan-500/30 bg-slate-900/90 p-4 text-center animate-in fade-in duration-200 shadow-xl shadow-cyan-500/10">
+                        <div className="mx-auto flex h-48 w-48 items-center justify-center rounded-2xl bg-white p-3 shadow-inner ring-4 ring-cyan-500/20">
+                          {qrDataUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={qrDataUrl}
+                              alt="Real Scannable NPCI UPI QR Code"
+                              className="h-full w-full object-contain rounded-lg"
+                            />
                           ) : (
-                            <span className="text-amber-400/90 flex items-center gap-1">
-                              <AlertCircle size={12} /> Pehle QR scan karke pay karein aur receipt se 12-digit UTR yahan dalein tabhi activate hoga.
-                            </span>
+                            <div className="flex h-full w-full items-center justify-center text-xs text-slate-700 font-mono animate-pulse">
+                              Generating Standard UPI QR...
+                            </div>
                           )}
-                        </p>
+                        </div>
+
+                        <div className="mt-3 space-y-1">
+                          <p className="text-xs font-bold text-white font-mono">
+                            Scan with any UPI App • {currentDisplayPrice} {isTestMode && "(Live Test Deposit)"}
+                          </p>
+                          <p className="text-[11px] text-cyan-400 font-medium">
+                            Payee: Umendra Bhati • UPI: {cleanUpi}
+                          </p>
+                        </div>
+
+                        {/* QUICK MOBILE UPI APP DEEP-LINK & COPY */}
+                        <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                          <a
+                            href={upiUrl}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+                          >
+                            <ExternalLink size={12} />
+                            Open in UPI App
+                          </a>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (typeof navigator !== "undefined") {
+                                navigator.clipboard.writeText(cleanUpi);
+                                setCopiedUpi(true);
+                                setTimeout(() => setCopiedUpi(false), 2000);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-white transition"
+                          >
+                            <Copy size={12} />
+                            {copiedUpi ? "✓ UPI ID Copied!" : "Copy UPI ID"}
+                          </button>
+                        </div>
+
+                        {/* UTR TRANSACTION CONFIRMATION INPUT */}
+                        <div className="mt-3 pt-3 border-t border-white/10 text-left">
+                          <label className="block text-[10px] font-semibold text-slate-400 mb-1">
+                            After Payment: Enter 12-Digit UTR / Ref No. (From BHIM/GPay/PhonePe):
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={utrNumber}
+                              onChange={(e) => {
+                                setPaymentError("");
+                                setUtrNumber(e.target.value.replace(/[^\d]/g, "").slice(0, 12));
+                              }}
+                              placeholder="e.g. 424109823145"
+                              className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-xs font-mono text-cyan-300 placeholder-slate-600 focus:border-cyan-500 focus:outline-none"
+                            />
+                            <span className="absolute right-3 top-2.5 text-[10px] font-mono text-slate-500">
+                              {utrNumber.length}/12
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -605,14 +785,16 @@ export default function PaymentModal({
               onClick={handleProcessPayment}
               disabled={
                 isProcessing ||
-                (gateway === "razorpay" && utrNumber.trim().length !== 12)
+                (gateway === "razorpay" && razorpayMethod === "manual" && utrNumber.trim().length !== 12)
               }
               className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-6 py-3 text-xs font-bold text-white shadow-lg shadow-emerald-500/25 transition hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Zap size={14} className={isProcessing ? "animate-spin" : "fill-white"} />
               {isProcessing
-                ? "Verifying Bank UTR..."
-                : gateway === "razorpay" && utrNumber.trim().length !== 12
+                ? "Connecting Bank Gateway..."
+                : gateway === "razorpay" && razorpayMethod === "auto"
+                ? `⚡ Pay ${currentDisplayPrice} with Razorpay`
+                : gateway === "razorpay" && razorpayMethod === "manual" && utrNumber.trim().length !== 12
                 ? `🔒 Enter 12-Digit UTR to Activate`
                 : `⚡ Verify ${currentDisplayPrice} & Activate`}
             </button>
