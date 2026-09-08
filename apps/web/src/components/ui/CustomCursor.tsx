@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { playClickSound, playHoverSound } from "@/app/utils/soundEffects";
 
 export default function CustomCursor() {
   const [mounted, setMounted] = useState(false);
@@ -45,28 +44,9 @@ export default function CustomCursor() {
           target.closest(".cursor-pointer"));
 
       if (isInteractive) {
-        if (!wasHovered) {
-          playHoverSound();
-          wasHovered = true;
-        }
         setIsHovered(true);
       } else {
-        wasHovered = false;
         setIsHovered(false);
-      }
-    };
-
-    const onClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.closest("button") ||
-          target.closest("a") ||
-          target.closest("select") ||
-          target.closest("[role='button']") ||
-          target.closest(".cursor-pointer"))
-      ) {
-        playClickSound();
       }
     };
 
@@ -85,14 +65,12 @@ export default function CustomCursor() {
     };
 
     window.addEventListener("mousemove", onMouseMove, { passive: true });
-    window.addEventListener("click", onClick, { capture: true, passive: true });
     document.addEventListener("mouseleave", onMouseLeave);
     document.addEventListener("mouseenter", onMouseEnter);
     animFrameId = requestAnimationFrame(render);
 
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("click", onClick, { capture: true });
       document.removeEventListener("mouseleave", onMouseLeave);
       document.removeEventListener("mouseenter", onMouseEnter);
       cancelAnimationFrame(animFrameId);

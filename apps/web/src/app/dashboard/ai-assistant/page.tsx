@@ -64,6 +64,7 @@ export default function AIAssistantPage() {
     company: "Apex Technologies",
     phone: "7850051826",
   });
+  const autoCallTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleStartAiCall = (
     leadName = "Rahul Sharma",
@@ -71,6 +72,10 @@ export default function AIAssistantPage() {
     company = "Apex Technologies",
     leadId?: string
   ) => {
+    if (autoCallTimerRef.current) {
+      clearTimeout(autoCallTimerRef.current);
+      autoCallTimerRef.current = null;
+    }
     playClickSound();
     setCallModalData({
       isOpen: true,
@@ -240,7 +245,8 @@ export default function AIAssistantPage() {
           targetName = "Umendra Bhati";
         }
 
-        setTimeout(() => {
+        if (autoCallTimerRef.current) clearTimeout(autoCallTimerRef.current);
+        autoCallTimerRef.current = setTimeout(() => {
           handleStartAiCall(targetName, detectedPhone, "Apex Technologies");
         }, 1200);
       }
@@ -785,9 +791,13 @@ export default function AIAssistantPage() {
         company={callModalData.company}
         phone={callModalData.phone}
         leadId={callModalData.leadId}
-        onClose={() =>
-          setCallModalData((prev) => ({ ...prev, isOpen: false }))
-        }
+        onClose={() => {
+          if (autoCallTimerRef.current) {
+            clearTimeout(autoCallTimerRef.current);
+            autoCallTimerRef.current = null;
+          }
+          setCallModalData((prev) => ({ ...prev, isOpen: false }));
+        }}
         onCallLogged={(_id, summary) => {
           setMessages((prev) => [
             ...prev,

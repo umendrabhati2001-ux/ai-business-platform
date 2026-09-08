@@ -14,6 +14,7 @@ import {
   Clock,
   MessageSquare,
   Radio,
+  X,
 } from "lucide-react";
 import { playSuccessSound, playClickSound, playAiChime } from "@/app/utils/soundEffects";
 
@@ -62,9 +63,11 @@ export default function AiCallModal({
   const recognitionRef = useRef<any>(null);
   const callActiveRef = useRef(false);
   const timeoutsRef = useRef<NodeJS.Timeout[]>([]);
+  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   // Safe timeout scheduler that immediately cancels if call ends
   const scheduleTimeout = (fn: () => void, ms: number) => {
+    if (!callActiveRef.current) return null;
     const id = setTimeout(() => {
       if (!callActiveRef.current) return;
       fn();
@@ -84,11 +87,20 @@ export default function AiCallModal({
   // Stop any active ring tone
   const stopRingTone = () => {
     try {
+      if (ringGain.current) {
+        ringGain.current.gain.value = 0;
+        ringGain.current.disconnect();
+        ringGain.current = null;
+      }
       if (ringOsc1.current) {
         ringOsc1.current.stop();
         ringOsc1.current.disconnect();
         ringOsc1.current = null;
       }
+    } catch {
+      // Ignore
+    }
+    try {
       if (ringOsc2.current) {
         ringOsc2.current.stop();
         ringOsc2.current.disconnect();
@@ -142,24 +154,32 @@ export default function AiCallModal({
     timeoutsRef.current.forEach((id) => clearTimeout(id));
     timeoutsRef.current = [];
 
+    // Clear duration interval
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
     // Stop and kill ring tone
     stopRingTone();
 
-    // Cancel any active SpeechSynthesis immediately with multi-frame purge
+    // Mute and detach active utterance
+    if (currentUtteranceRef.current) {
+      try {
+        currentUtteranceRef.current.volume = 0;
+        currentUtteranceRef.current.onend = null;
+        currentUtteranceRef.current.onerror = null;
+      } catch {}
+      currentUtteranceRef.current = null;
+    }
+
+    // HARD PURGE for SpeechSynthesis (fixes Chrome on Windows audio buffer persistence)
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       try {
-        window.speechSynthesis.pause();
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
         window.speechSynthesis.cancel();
-        setTimeout(() => {
-          if (typeof window !== "undefined" && "speechSynthesis" in window) {
-            window.speechSynthesis.cancel();
-          }
-        }, 50);
-        setTimeout(() => {
-          if (typeof window !== "undefined" && "speechSynthesis" in window) {
-            window.speechSynthesis.cancel();
-          }
-        }, 150);
       } catch (err) {
         console.warn("Speech cancel error:", err);
       }
@@ -179,6 +199,7 @@ export default function AiCallModal({
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
+        recognitionRef.current.abort();
       } catch {
         // ignore
       }
@@ -215,6 +236,7 @@ export default function AiCallModal({
     setIsAiSpeaking(true);
 
     const utterance = new SpeechSynthesisUtterance(text);
+    currentUtteranceRef.current = utterance;
     const voices = window.speechSynthesis.getVoices();
 
     if (voiceMode === "indian") {
@@ -256,15 +278,18 @@ export default function AiCallModal({
 
     utterance.onend = () => {
       setIsAiSpeaking(false);
+      currentUtteranceRef.current = null;
       if (onEnd && callActiveRef.current) onEnd();
     };
 
     utterance.onerror = () => {
       setIsAiSpeaking(false);
+      currentUtteranceRef.current = null;
     };
 
     if (!callActiveRef.current) {
       setIsAiSpeaking(false);
+      currentUtteranceRef.current = null;
       return;
     }
 
@@ -350,7 +375,8 @@ export default function AiCallModal({
     }
 
     // 3. AI Speaks back after brief realistic pause
-    setTimeout(() => {
+    scheduleTimeout(() => {
+      if (!callActiveRef.current) return;
       playAiChime();
       setTranscripts((prev) => [
         ...prev,
@@ -695,15 +721,52 @@ export default function AiCallModal({
         `AI Call completed with ${leadName}. Demo confirmed for Thursday 2 PM. WhatsApp package dispatched. Lead advanced to Working - Contacted.`
       );
     }
+
+    // Auto-close call modal after 500ms so user sees clean hangup feedback
+    setTimeout(() => {
+      onClose();
+    }, 500);
   };
+
+  // Keyboard Escape listener to instantly hang up & close
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isOpen) {
+        handleEndCall();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
+    <div
+      className="fixed inset-0 z-[999999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          handleEndCall();
+          onClose();
+        }
+      }}
+    >
       <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-cyan-500/40 bg-slate-950 shadow-2xl shadow-cyan-500/30">
         {/* TOP CALL HEADER */}
         <div className="relative border-b border-white/10 bg-gradient-to-b from-slate-900 to-slate-950 p-6 text-center">
+          {/* Quick Hangup / Close Button */}
+          <button
+            type="button"
+            onClick={() => {
+              handleEndCall();
+              onClose();
+            }}
+            className="absolute right-4 top-4 rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 hover:border-red-500/40 hover:bg-red-500/20 hover:text-white transition"
+            title="End Call & Close"
+          >
+            <X size={18} />
+          </button>
           {/* Status Badge */}
           <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-1 text-xs font-semibold text-cyan-400 mb-4">
             <span
